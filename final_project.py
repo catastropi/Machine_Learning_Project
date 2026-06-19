@@ -67,6 +67,14 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LinearRegression, RANSACRegressor, Ridge, Lasso
 from sklearn.ensemble import RandomForestRegressor
 
+# ── [추가] 피드백 반영을 위한 추가 라이브러리 ────────────────
+#   - precision_score / recall_score / confusion_matrix : Recall·Precision 평가
+#   - IsolationForest / LocalOutlierFactor / OneClassSVM : 비지도 이상 탐지 확장
+from sklearn.metrics import precision_score, recall_score, confusion_matrix
+from sklearn.ensemble import IsolationForest
+from sklearn.neighbors import LocalOutlierFactor
+from sklearn.svm import OneClassSVM
+
 
 # ╔══════════════════════════════════════════════════════════╗
 # ║  PART 1 · 데이터 로드 & EDA                              ║
@@ -273,6 +281,43 @@ print(f"  F1: {f1_rf_c:.4f}  |  ROC-AUC: {auc_rf_c:.4f}")
 print("\n  --- Final Classification Report (Random Forest) ---")
 print(classification_report(y_test_c, y_pred_rf_c))
 
+# ╔══════════════════════════════════════════════════════════╗
+# ║  [추가] PART 3-2 · Precision / Recall 평가                ║
+# ║   [피드백 반영] "사기 탐지를 했는가/안했는가"가 중요 →     ║
+# ║   Recall(실제 사기 중 탐지 비율)을 Precision과 함께 명시  ║
+# ╚══════════════════════════════════════════════════════════╝
+print("\n" + "=" * 60)
+print("[추가] PART 3-2 · Precision / Recall 평가 (Recall 중심)")
+print("=" * 60)
+
+precision_ada = precision_score(y_test_c, y_pred_ada, zero_division=0)
+recall_ada    = recall_score(y_test_c, y_pred_ada, zero_division=0)
+
+precision_lr  = precision_score(y_test_c, y_pred_lr,  zero_division=0)
+recall_lr     = recall_score(y_test_c, y_pred_lr,  zero_division=0)
+
+precision_svm = precision_score(y_test_c, y_pred_svm, zero_division=0)
+recall_svm    = recall_score(y_test_c, y_pred_svm, zero_division=0)
+
+precision_rf_c = precision_score(y_test_c, y_pred_rf_c, zero_division=0)
+recall_rf_c    = recall_score(y_test_c, y_pred_rf_c, zero_division=0)
+
+clf_precisions = [precision_ada, precision_lr, precision_svm, precision_rf_c]
+clf_recalls    = [recall_ada,    recall_lr,    recall_svm,    recall_rf_c]
+
+n_total_fraud_test = int(np.sum(y_test_c == 1))
+
+for name_m, y_pred_m, prec_m, rec_m in zip(
+        ['AdalineSGD', 'Logistic Regression', 'SVM', 'Random Forest'],
+        [y_pred_ada, y_pred_lr, y_pred_svm, y_pred_rf_c],
+        clf_precisions, clf_recalls):
+    tn_m, fp_m, fn_m, tp_m = confusion_matrix(y_test_c, y_pred_m).ravel()
+    print(f"  [{name_m:>20}] Precision: {prec_m:.4f} | Recall: {rec_m:.4f}  "
+          f"→ 실제 사기 {n_total_fraud_test}건 중 {tp_m}건 탐지, {fn_m}건 미탐지(놓침)")
+
+print("\n  ※ Recall이 낮으면 실제 사기 거래를 놓치는(False Negative) 경우가 많다는 의미이며,")
+print("    금융 사기 탐지에서는 Precision 못지않게 Recall이 핵심 지표가 됨.")
+
 # ── 분류 Feature Importance ─────────────────────────────────
 importances_c = (gs_rf_c.best_estimator_
                  .named_steps['randomforestclassifier']
@@ -319,9 +364,99 @@ best_clf_name = clf_models[np.argmax(clf_aucs)]
 print(f"  → {best_clf_name.replace(chr(10),'')}  "
       f"(AUC={max(clf_aucs):.4f})")
 
+# ── [추가] Precision / Recall 비교 시각화 ───────────────────
+fig, ax = plt.subplots(figsize=(8, 5))
+x_pr = np.arange(len(clf_models))
+w_pr = 0.35
+bars_p = ax.bar(x_pr - w_pr/2, clf_precisions, w_pr, label='Precision',
+                 color='#3498DB', alpha=0.85, edgecolor='black')
+bars_r = ax.bar(x_pr + w_pr/2, clf_recalls,    w_pr, label='Recall',
+                 color='#E74C3C', alpha=0.85, edgecolor='black')
+ax.set_xticks(x_pr)
+ax.set_xticklabels(clf_models)
+ax.set_ylim(0, 1.15)
+ax.set_title('[추가] Classifier Comparison — Precision vs Recall\n(Recall = 실제 사기 탐지율)')
+ax.legend()
+for bar in bars_p:
+    ax.text(bar.get_x()+bar.get_width()/2, bar.get_height()+0.01,
+            f'{bar.get_height():.3f}', ha='center', fontsize=8)
+for bar in bars_r:
+    ax.text(bar.get_x()+bar.get_width()/2, bar.get_height()+0.01,
+            f'{bar.get_height():.3f}', ha='center', fontsize=8)
+plt.tight_layout()
+plt.show()
+
+best_recall_idx = np.argmax(clf_recalls)
+print(f"\n[추가] Recall 기준 최고 모델: {clf_models[best_recall_idx].replace(chr(10),'')} "
+      f"(Recall={clf_recalls[best_recall_idx]:.4f}) — 사기를 가장 많이 탐지해낸 모델")
+
 
 # ╔══════════════════════════════════════════════════════════╗
-# ║  PART 4 · 회귀 모델 — 거래 금액(Amount) 예측            ║
+# ║  [추가] PART 3-5 · 주요 변수 분리 기준 명확화             ║
+# ║   [피드백 반영] V1~V28 같은 모호한 변수명/중요도 랭킹 대신,║
+# ║   실제 값 분포와 구체적 임계값(threshold)으로 분리 기준 제시║
+# ╚══════════════════════════════════════════════════════════╝
+print("\n" + "=" * 60)
+print("[추가] PART 3-5 · 주요 변수의 정상/사기 분리 기준(Threshold) 분석")
+print("=" * 60)
+
+top_n_feat = 5
+top_feat_idx = indices_c[:top_n_feat]
+top_feat_names = [clf_feat_names[i] for i in top_feat_idx]
+
+X_train_c_df = pd.DataFrame(X_train_c, columns=clf_feat_names)
+X_train_c_df['Class'] = y_train_c
+
+sep_summary = []
+print(f"\n  상위 {top_n_feat}개 변수의 정상 vs 사기 거래 값 분포 및 분리 기준:\n")
+for feat in top_feat_names:
+    normal_vals = X_train_c_df.loc[X_train_c_df['Class'] == 0, feat]
+    fraud_vals  = X_train_c_df.loc[X_train_c_df['Class'] == 1, feat]
+    # 사기 거래의 중앙값을 분리 기준(threshold)으로 사용
+    threshold = fraud_vals.median()
+    is_lower  = fraud_vals.median() < normal_vals.median()
+    rule_op   = '<=' if is_lower else '>='
+    flagged   = (X_train_c_df[feat] <= threshold) if is_lower else (X_train_c_df[feat] >= threshold)
+    flagged_df = X_train_c_df[flagged]
+    fraud_rate_in_flag = np.mean(flagged_df['Class']) * 100
+    rule_text = f"{feat} {rule_op} {threshold:.2f}"
+    print(f"  [{feat}] 정상 평균={normal_vals.mean():.2f}, 사기 평균={fraud_vals.mean():.2f} | "
+          f"분리 기준: {rule_text}  → 해당 조건 거래의 사기 비율: {fraud_rate_in_flag:.2f}%")
+    sep_summary.append({
+        'Feature': feat, 'Normal_Mean': round(normal_vals.mean(), 3),
+        'Fraud_Mean': round(fraud_vals.mean(), 3), 'Threshold': round(threshold, 3),
+        'Rule': rule_text, 'Fraud_Rate_in_Rule(%)': round(fraud_rate_in_flag, 2)
+    })
+
+sep_df = pd.DataFrame(sep_summary)
+print("\n--- 변수별 분리 기준 요약표 (V1~V28 단순 중요도 대신 구체적 수치 기준) ---")
+print(sep_df.to_string(index=False))
+
+# 박스플롯으로 분리 기준 시각화 (단순 중요도 막대 대신 실제 분포·임계값으로 확인)
+fig, axes = plt.subplots(1, top_n_feat, figsize=(4*top_n_feat, 5))
+fig.suptitle('[추가] Top Features — Normal vs Fraud Distribution (분리 기준 시각화)',
+             fontsize=13, fontweight='bold')
+for i, feat in enumerate(top_feat_names):
+    data_to_plot = [X_train_c_df.loc[X_train_c_df['Class'] == 0, feat],
+                    X_train_c_df.loc[X_train_c_df['Class'] == 1, feat]]
+    bp = axes[i].boxplot(data_to_plot, tick_labels=['Normal', 'Fraud'],
+                          patch_artist=True, showfliers=False)
+    for patch, color in zip(bp['boxes'], ['lightgray', 'tomato']):
+        patch.set_facecolor(color)
+    axes[i].set_title(feat)
+    thr_val = sep_df.loc[sep_df['Feature'] == feat, 'Threshold'].values[0]
+    axes[i].axhline(y=thr_val, color='blue', linestyle='--', linewidth=1, label='Threshold')
+    axes[i].legend(fontsize=7)
+plt.tight_layout()
+plt.show()
+
+print("\n  ※ V1~V28은 PCA로 익명화된 변수라 의미 해석은 어렵지만,")
+print("    위 표·박스플롯처럼 '구체적인 값 기준'으로 정상/사기 분리 경계를 제시하면")
+print("    모호한 중요도 랭킹보다 실무에서 훨씬 활용도가 높음.")
+
+
+# ╔══════════════════════════════════════════════════════════╗
+# ║  PART 4 · 회귀 모델 — 거래 금액(Amount) 예측             ║
 # ╚══════════════════════════════════════════════════════════╝
 print("\n" + "=" * 60)
 print("PART 4 · 회귀 모델 — 거래 금액(Amount) 예측")
@@ -564,6 +699,83 @@ plt.tight_layout()
 plt.show()
 
 
+# ╔══════════════════════════════════════════════════════════╗
+# ║  [추가] PART 5-1 · Isolation Forest / LOF / One-Class SVM ║
+# ║   [피드백 반영] 사기 탐지(Anomaly Detection)를 위한        ║
+# ║   비지도 학습 기법을 DBSCAN 외에 추가로 확장              ║
+# ╚══════════════════════════════════════════════════════════╝
+print("\n" + "=" * 60)
+print("[추가] PART 5-1 · Isolation Forest / LOF / One-Class SVM")
+print("  [피드백 반영] 비지도 Anomaly Detection 기법 확장 + Recall 평가")
+print("=" * 60)
+
+scaler_unsup = StandardScaler()
+X_train_c_scaled = scaler_unsup.fit_transform(X_train_c)
+X_test_c_scaled  = scaler_unsup.transform(X_test_c)
+
+# contamination(이상치 비율)은 학습 데이터의 실제 사기 비율로 설정
+contamination_rate = float(np.mean(y_train_c))
+print(f"\n  (참고) Contamination 비율 = 학습 데이터 사기 비율 = {contamination_rate*100:.3f}%\n")
+
+# 1) Isolation Forest — 트리 기반 고립도로 이상치 탐지
+iso = IsolationForest(contamination=contamination_rate, random_state=1, n_estimators=100)
+iso.fit(X_train_c_scaled)
+iso_pred_bin = (iso.predict(X_test_c_scaled) == -1).astype(int)   # 1 = 이상치(사기 추정)
+
+# 2) Local Outlier Factor — 국소 밀도 기반 이상치 탐지 (novelty=True → 신규 데이터 예측 가능)
+lof = LocalOutlierFactor(n_neighbors=20, contamination=contamination_rate, novelty=True)
+lof.fit(X_train_c_scaled)
+lof_pred_bin = (lof.predict(X_test_c_scaled) == -1).astype(int)
+
+# 3) One-Class SVM — 정상 데이터의 경계(boundary)를 학습해 이상치 탐지
+ocsvm = OneClassSVM(kernel='rbf', nu=max(contamination_rate, 0.01), gamma='scale')
+ocsvm.fit(X_train_c_scaled)
+ocsvm_pred_bin = (ocsvm.predict(X_test_c_scaled) == -1).astype(int)
+
+unsup_models = {'Isolation Forest': iso_pred_bin,
+                'LOF': lof_pred_bin,
+                'One-Class SVM': ocsvm_pred_bin}
+
+unsup_results = []
+n_total_fraud_test_u = int(np.sum(y_test_c == 1))
+for name_u, pred_u in unsup_models.items():
+    prec_u = precision_score(y_test_c, pred_u, zero_division=0)
+    rec_u  = recall_score(y_test_c, pred_u, zero_division=0)
+    f1_u   = f1_score(y_test_c, pred_u, zero_division=0)
+    n_flagged = int(np.sum(pred_u))
+    n_caught  = int(np.sum((pred_u == 1) & (y_test_c == 1)))
+    print(f"  [{name_u:>16}] 탐지된 이상치: {n_flagged:>4}건 | "
+          f"실제 사기 중 탐지: {n_caught}/{n_total_fraud_test_u}건 "
+          f"| Precision: {prec_u:.4f} | Recall: {rec_u:.4f} | F1: {f1_u:.4f}")
+    unsup_results.append({'Model': name_u, 'Precision': prec_u, 'Recall': rec_u, 'F1': f1_u})
+
+unsup_df = pd.DataFrame(unsup_results)
+print("\n--- 비지도 이상 탐지 모델 비교 (Recall 중심) ---")
+print(unsup_df.to_string(index=False))
+
+# 시각화: 비지도 모델별 Precision / Recall / F1
+fig, ax = plt.subplots(figsize=(9, 5))
+x_u = np.arange(len(unsup_df))
+w_u = 0.25
+ax.bar(x_u - w_u, unsup_df['Precision'], w_u, label='Precision', color='#3498DB', edgecolor='black', alpha=0.85)
+ax.bar(x_u,       unsup_df['Recall'],    w_u, label='Recall',    color='#E74C3C', edgecolor='black', alpha=0.85)
+ax.bar(x_u + w_u, unsup_df['F1'],        w_u, label='F1',        color='#2ECC71', edgecolor='black', alpha=0.85)
+ax.set_xticks(x_u)
+ax.set_xticklabels(unsup_df['Model'])
+ax.set_ylim(0, 1.1)
+ax.set_title('[추가] Unsupervised Anomaly Detection — Precision / Recall / F1\n(사기 탐지 여부 = Recall 중심 평가)')
+ax.legend()
+for i in range(len(unsup_df)):
+    for j, col in enumerate(['Precision', 'Recall', 'F1']):
+        val = unsup_df.iloc[i][col]
+        ax.text(x_u[i] + (j-1)*w_u, val + 0.02, f'{val:.3f}', ha='center', fontsize=8)
+plt.tight_layout()
+plt.show()
+
+print("\n  ※ 비지도 기법은 레이블 없이도 이상 거래를 탐지할 수 있어,")
+print("    신규/미지의 사기 패턴(unseen fraud pattern) 대응에 강점이 있음.")
+print("    단, Recall이 지도 학습 대비 낮을 수 있어 보조 탐지 신호로 함께 활용하는 것을 권장.")
+
 
 # PART 6 · 잔차 기반 이상 거래 탐지 분석
 
@@ -757,3 +969,58 @@ print()
 print("► 지도 학습(분류)으로 개별 거래의 사기 여부를 고정밀 탐지하고,")
 print("  회귀 잔차·RANSAC·DBSCAN의 비지도 신호를 결합하면")
 print("  실제 금융 환경의 '앙상블 이상 탐지 시스템' 구축이 가능합니다.")
+
+
+# ╔══════════════════════════════════════════════════════════╗
+# ║  [추가] PART 8 · 피드백 반영 종합 — Recall 중심 모델 비교 ║
+# ╚══════════════════════════════════════════════════════════╝
+print("\n" + "=" * 60)
+print("[추가] PART 8 · 피드백 반영 종합 비교 (지도 + 비지도, Recall 중심)")
+print("=" * 60)
+
+final_compare = pd.DataFrame({
+    'Model': [m.replace('\n', ' ') for m in clf_models] + list(unsup_df['Model']),
+    'Type':  ['Supervised'] * len(clf_models) + ['Unsupervised'] * len(unsup_df),
+    'Precision': clf_precisions + list(unsup_df['Precision']),
+    'Recall':    clf_recalls    + list(unsup_df['Recall']),
+})
+print(final_compare.to_string(index=False))
+
+fig, ax = plt.subplots(figsize=(11, 5))
+colors_final = ['#3498DB' if t == 'Supervised' else '#F39C12' for t in final_compare['Type']]
+x_f = np.arange(len(final_compare))
+ax.bar(x_f, final_compare['Recall'], color=colors_final, edgecolor='black', alpha=0.85)
+ax.set_xticks(x_f)
+ax.set_xticklabels(final_compare['Model'], rotation=30, ha='right')
+ax.set_ylim(0, 1.15)
+ax.set_ylabel('Recall')
+ax.set_title('[추가] 전체 모델 Recall 비교 — 지도학습(파랑) vs 비지도학습(주황)\n(Recall = 실제 사기를 얼마나 놓치지 않고 탐지했는가)')
+mean_recall = float(np.mean(final_compare['Recall']))
+ax.axhline(y=mean_recall, color='gray', linestyle='--', linewidth=1,
+           label=f'평균 Recall ({mean_recall:.3f})')
+ax.legend()
+for i, v in enumerate(final_compare['Recall']):
+    ax.text(i, v + 0.02, f'{v:.3f}', ha='center', fontsize=8)
+plt.tight_layout()
+plt.show()
+
+print("\n" + "=" * 60)
+print("■ [추가] 피드백 반영 최종 결론")
+print("=" * 60)
+print("""
+1) Recall 중심 평가
+   - 사기 탐지 시스템의 핵심은 '실제 사기 거래를 놓치지 않는 것(Recall)'.
+   - Precision과 Recall을 함께 제시하여, 모델이 사기를 '탐지했는지 안했는지'를
+     F1/AUC 한 줄 요약이 아닌 실제 탐지 건수(TP)·미탐지 건수(FN)로 직접 확인 가능하도록 보완.
+
+2) 분리 기준 명확화
+   - 기존 V1~V28 중요도 랭킹은 변수 자체가 PCA로 익명화되어 의미 해석이 어려움.
+   - 상위 변수별 정상/사기 그룹의 실제 값 분포(Box Plot)와 구체적 분리 임계값(threshold)을
+     제시하여 "어떤 값일 때 사기로 의심되는가"를 명확히 보완 (PART 3-5).
+
+3) 비지도 이상 탐지 기법 확장
+   - 기존 DBSCAN에 더해 Isolation Forest, Local Outlier Factor, One-Class SVM을 추가하여
+     레이블 없이도 이상 거래를 탐지하는 Anomaly Detection 접근을 보강 (PART 5-1).
+   - 비지도 기법은 신규/미지의 사기 패턴에도 대응 가능하다는 장점이 있으며,
+     지도 학습 모델과 함께 앙상블 신호로 활용 시 Recall 보완 효과를 기대할 수 있음.
+""")
